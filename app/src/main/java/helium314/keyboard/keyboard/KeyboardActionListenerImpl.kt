@@ -541,6 +541,7 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
     private var deleteSwipeExactRequested = false
     private var deleteSwipeExactPending = false
     private var deleteSwipePendingStepsY = 0
+    private var deleteSwipeExactRetried = false
     private var deleteSwipeTimeout: Runnable? = null
     // Editor (app) that didn't answer or doesn't support it: don't ask again there until the keyboard is restarted
     private var noTextBoundsPackage: String? = null
@@ -602,6 +603,7 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
         deleteSwipeGeneration++
         deleteSwipeExactRequested = false
         deleteSwipeExactPending = false
+        deleteSwipeExactRetried = false
         deleteSwipePendingStepsY = 0
         deleteSwipeTimeout?.let { deleteSwipeHandler.removeCallbacks(it) }
         deleteSwipeTimeout = null
@@ -631,6 +633,11 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
         val generation = deleteSwipeGeneration
         val baseStart = deleteSwipeStartForExactLines()
         val bounds = RectF(-HUGE_HORIZONTAL, markerTop - EXACT_LINES_LOOKUP * lineHeight, HUGE_HORIZONTAL, markerBottom)
+        if (!sendExactLinesRequest(bounds, generation, baseStart, editorPackage)) return debugNote("TBI: request could not be sent")
+        debugNote("TBI: asked editor, marker=$markerTop..$markerBottom")
+    }
+
+    private fun sendExactLinesRequest(bounds: RectF, generation: Int, baseStart: Int, editorPackage: String?): Boolean {
         deleteSwipeExactPending = true
         val sent = connection.requestTextBoundsInfo(bounds) { info ->
             if (generation == deleteSwipeGeneration && deleteSwipeExactPending)
@@ -638,9 +645,9 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
         }
         if (!sent) {
             deleteSwipeExactPending = false
-            return debugNote("TBI: request could not be sent")
+            return false
         }
-        debugNote("TBI: asked editor, marker=$markerTop..$markerBottom")
+        deleteSwipeTimeout?.let { deleteSwipeHandler.removeCallbacks(it) }
         val timeout = Runnable {
             if (generation == deleteSwipeGeneration && deleteSwipeExactPending) {
                 debugNote("TBI: no answer within ${EXACT_LINES_TIMEOUT_MILLIS} ms")
@@ -649,6 +656,7 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
         }
         deleteSwipeTimeout = timeout
         deleteSwipeHandler.postDelayed(timeout, EXACT_LINES_TIMEOUT_MILLIS)
+        return true
     }
 
     private fun deleteSwipeStartForExactLines() = deleteSwipeLineBoundaries.firstOrNull() ?: deleteSwipeInitialEnd
@@ -657,6 +665,14 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
         deleteSwipeExactPending = false
         deleteSwipeTimeout?.let { deleteSwipeHandler.removeCallbacks(it) }
         deleteSwipeTimeout = null
+        // some editors answer with only part of the area (seen: only the first line). If the answer does not reach
+        // the swipe's start, ask once more for the whole text
+        if (info != null && !deleteSwipeExactRetried && (info.endIndex < baseStart || info.startIndex > baseStart)) {
+            deleteSwipeExactRetried = true
+            debugNote("TBI: answer ${info.startIndex}..${info.endIndex} does not reach $baseStart, asking again for the whole area")
+            val whole = RectF(-HUGE_HORIZONTAL, -HUGE_HORIZONTAL, HUGE_HORIZONTAL, HUGE_HORIZONTAL)
+            if (sendExactLinesRequest(whole, deleteSwipeGeneration, baseStart, editorPackage)) return
+        }
         // vertical movement was held back while waiting, so the line index is still 0 and swapping is safe
         if (info == null) {
             debugNote("TBI: editor said unsupported/failed (or timeout), using estimate")
@@ -665,6 +681,7 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
             val exact = linesFromTextBoundsInfo(info, baseStart)
             debugNote("TBI: result base=$baseStart boundaries=${exact?.take(6)} size=${exact?.size}")
             if (exact != null && exact.size > 1) deleteSwipeLineBoundaries = exact
+            else if (deleteSwipeExactRetried) noTextBoundsPackage = editorPackage
         }
         val pending = deleteSwipePendingStepsY
         deleteSwipePendingStepsY = 0
@@ -674,7 +691,10 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
     /** Line boundaries (same layout as [getLineBoundariesBackwards]) from the editor's character geometry, or null. */
     private fun linesFromTextBoundsInfo(info: TextBoundsInfo, baseStart: Int): List<Int>? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
-        if (info.endIndex <= info.startIndex || info.startIndex > baseStart) return null
+        if (info.endIndex <= info.startIndex || info.startIndex > baseStart || info.endIndex < baseStart) {
+            debugNote("TBI: answer ${info.startIndex}..${info.endIndex} does not cover $baseStart, using estimate")
+            return null
+        }
         // only characters before the swipe's start matter, and only the last ones if there are very many
         val end = minOf(info.endIndex, baseStart)
         val start = maxOf(info.startIndex, end - MAX_EXACT_LINES_CHARS)
