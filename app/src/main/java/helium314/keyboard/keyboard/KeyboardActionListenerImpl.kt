@@ -8,6 +8,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
 import android.util.SparseArray
+import android.widget.Toast
 import android.view.KeyEvent
 import android.view.inputmethod.InputMethodSubtype
 import android.view.inputmethod.TextBoundsInfo
@@ -22,6 +23,7 @@ import helium314.keyboard.keyboard.internal.keyboard_parser.floris.KeyCode
 import helium314.keyboard.latin.AudioAndHapticFeedbackManager
 import helium314.keyboard.latin.EmojiAltPhysicalKeyDetector
 import helium314.keyboard.latin.LastComposedWord
+import helium314.keyboard.latin.BuildConfig
 import helium314.keyboard.latin.LatinIME
 import helium314.keyboard.latin.R
 import helium314.keyboard.latin.RichInputMethodManager
@@ -588,6 +590,14 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
         }
     }
 
+    private var debugToast: Toast? = null
+    /** Diagnostics, debug builds only: shows what the exact-lines code does. Remove before merging. */
+    private fun debugNote(message: String) {
+        if (!BuildConfig.DEBUG) return
+        debugToast?.cancel()
+        debugToast = Toast.makeText(latinIME, message, Toast.LENGTH_LONG).also { it.show() }
+    }
+
     private fun resetDeleteSwipeExactLines() {
         deleteSwipeGeneration++
         deleteSwipeExactRequested = false
@@ -604,18 +614,18 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
      */
     private fun requestExactLines() {
         deleteSwipeExactRequested = true
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return debugNote("TBI: Android < 14")
         if (!settings.current.mDeleteSwipeExactLines) return
-        val keyboardId = keyboardSwitcher.keyboard?.mId ?: return
-        if (!keyboardId.isMultiLine) return
+        val keyboardId = keyboardSwitcher.keyboard?.mId ?: return debugNote("TBI: no keyboard id")
+        if (!keyboardId.isMultiLine) return debugNote("TBI: field is not multi-line")
         val editorPackage = keyboardId.mEditorInfo.packageName
-        if (editorPackage != null && editorPackage == noTextBoundsPackage) return
+        if (editorPackage != null && editorPackage == noTextBoundsPackage) return debugNote("TBI: skipped, $editorPackage marked unsupported")
         // where the cursor line is, as reported by the editor (needs cursor updates, see InputLogic.startInput)
-        val anchor = connection.lastCursorAnchorInfo ?: return
+        val anchor = connection.lastCursorAnchorInfo ?: return debugNote("TBI: editor sent no CursorAnchorInfo")
         val markerTop = anchor.insertionMarkerTop
         val markerBottom = anchor.insertionMarkerBottom
         val lineHeight = markerBottom - markerTop
-        if (markerTop.isNaN() || markerBottom.isNaN() || lineHeight <= 0f) return
+        if (markerTop.isNaN() || markerBottom.isNaN() || lineHeight <= 0f) return debugNote("TBI: bad cursor marker top=$markerTop bottom=$markerBottom")
 
         val generation = deleteSwipeGeneration
         val baseStart = deleteSwipeStartForExactLines()
@@ -627,10 +637,14 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
         }
         if (!sent) {
             deleteSwipeExactPending = false
-            return
+            return debugNote("TBI: request could not be sent")
         }
+        debugNote("TBI: asked editor, marker=$markerTop..$markerBottom")
         val timeout = Runnable {
-            if (generation == deleteSwipeGeneration && deleteSwipeExactPending) onExactLinesResult(null, baseStart, editorPackage)
+            if (generation == deleteSwipeGeneration && deleteSwipeExactPending) {
+                debugNote("TBI: no answer within ${EXACT_LINES_TIMEOUT_MILLIS} ms")
+                onExactLinesResult(null, baseStart, editorPackage)
+            }
         }
         deleteSwipeTimeout = timeout
         deleteSwipeHandler.postDelayed(timeout, EXACT_LINES_TIMEOUT_MILLIS)
@@ -644,9 +658,11 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
         deleteSwipeTimeout = null
         // vertical movement was held back while waiting, so the line index is still 0 and swapping is safe
         if (info == null) {
+            debugNote("TBI: editor said unsupported/failed (or timeout), using estimate")
             noTextBoundsPackage = editorPackage
         } else if (deleteSwipeLineIndex == 0 && deleteSwipeLineBoundaries.firstOrNull() == baseStart) {
             val exact = linesFromTextBoundsInfo(info, baseStart)
+            debugNote("TBI: result base=$baseStart boundaries=${exact?.take(6)} size=${exact?.size}")
             if (exact != null && exact.size > 1) deleteSwipeLineBoundaries = exact
         }
         val pending = deleteSwipePendingStepsY
@@ -674,6 +690,7 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
             lineFeed[i] = info.getCharacterFlags(start + i) and TextBoundsInfo.FLAG_CHARACTER_LINEFEED != 0
         }
         val starts = VisualLines.lineStarts(start, tops, bottoms, lineFeed)
+        debugNote("TBI: info=${info.startIndex}..${info.endIndex} used=$start..$end chars=$count lineStarts=${starts.size} top0=${tops[0]} bot0=${bottoms[0]} topN=${tops[count - 1]} botN=${bottoms[count - 1]}")
         if (starts.isEmpty()) return null
         val textStartOffset = deleteSwipeInitialEnd - deleteSwipeInitialText.length
         val charBefore = (start - 1 - textStartOffset).takeIf { it in deleteSwipeInitialText.indices }?.let { deleteSwipeInitialText[it] }
