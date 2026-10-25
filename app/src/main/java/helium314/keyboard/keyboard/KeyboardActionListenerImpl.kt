@@ -592,6 +592,8 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
     private var debugToast: Toast? = null
     /** Diagnostics, debug builds only: shows what the exact-lines code does. Remove before merging. */
     private fun debugNote(message: String) {
+        // goes to the app log: About -> Save log / Share log (warnings are included in that file)
+        helium314.keyboard.latin.utils.Log.w("TBI", message)
         debugToast?.cancel()
         debugToast = Toast.makeText(latinIME, message, Toast.LENGTH_LONG).also { it.show() }
     }
