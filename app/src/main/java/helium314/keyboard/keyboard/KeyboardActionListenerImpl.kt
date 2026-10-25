@@ -23,7 +23,6 @@ import helium314.keyboard.keyboard.internal.keyboard_parser.floris.KeyCode
 import helium314.keyboard.latin.AudioAndHapticFeedbackManager
 import helium314.keyboard.latin.EmojiAltPhysicalKeyDetector
 import helium314.keyboard.latin.LastComposedWord
-import helium314.keyboard.latin.BuildConfig
 import helium314.keyboard.latin.LatinIME
 import helium314.keyboard.latin.R
 import helium314.keyboard.latin.RichInputMethodManager
@@ -593,7 +592,6 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
     private var debugToast: Toast? = null
     /** Diagnostics, debug builds only: shows what the exact-lines code does. Remove before merging. */
     private fun debugNote(message: String) {
-        if (!BuildConfig.DEBUG) return
         debugToast?.cancel()
         debugToast = Toast.makeText(latinIME, message, Toast.LENGTH_LONG).also { it.show() }
     }
@@ -614,8 +612,9 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
      */
     private fun requestExactLines() {
         deleteSwipeExactRequested = true
+        debugNote("TBI v2: first vertical step, sdk=${Build.VERSION.SDK_INT}, option=${settings.current.mDeleteSwipeExactLines}, anchor=${connection.lastCursorAnchorInfo != null}")
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return debugNote("TBI: Android < 14")
-        if (!settings.current.mDeleteSwipeExactLines) return
+        if (!settings.current.mDeleteSwipeExactLines) return debugNote("TBI: option 'Exact lines' is OFF in this app")
         val keyboardId = keyboardSwitcher.keyboard?.mId ?: return debugNote("TBI: no keyboard id")
         if (!keyboardId.isMultiLine) return debugNote("TBI: field is not multi-line")
         val editorPackage = keyboardId.mEditorInfo.packageName
