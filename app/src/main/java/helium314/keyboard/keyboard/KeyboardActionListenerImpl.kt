@@ -804,9 +804,21 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
     }
 
     /** Start of the line currently used as base of the delete swipe selection. */
-    private fun deleteSwipeLineBase(): Int =
-        if (deleteSwipeLineBoundaries.isNotEmpty()) deleteSwipeLineBoundaries[deleteSwipeLineIndex]
-        else deleteSwipeInitialEnd
+    private fun deleteSwipeLineBase(): Int {
+        if (deleteSwipeLineBoundaries.isEmpty()) return deleteSwipeInitialEnd
+        // back on the line the swipe started in: that line's position for the kept column, not the swipe's start
+        if (deleteSwipeLineIndex == 0) exactBaseLinePosition()?.let { return it }
+        return deleteSwipeLineBoundaries[deleteSwipeLineIndex]
+    }
+
+    private fun exactBaseLinePosition(): Int? {
+        val g = exactGeometry ?: return null
+        if (exactDesiredX.isNaN() || deleteSwipeLineBoundaries.isEmpty()) return null
+        val baseStart = deleteSwipeLineBoundaries[0]
+        val line = g.lineIndexOf(baseStart)
+        if (line < 0) return null
+        return minOf(g.columnOffset(line, exactDesiredX), baseStart)
+    }
 
     /** Selection start when the delete swipe began, i.e. the right-most point the selection start may be moved to. */
     private fun deleteSwipeSelectionAnchor(): Int =
@@ -851,7 +863,7 @@ class KeyboardActionListenerImpl(private val latinIME: LatinIME, private val inp
                     lineBaseStart
                 }
             } else {
-                val wordsBeforeLine = if (deleteSwipeLineIndex == 0) {
+                val wordsBeforeLine = if (deleteSwipeLineIndex == 0 && lineBaseStart == deleteSwipeSelectionAnchor()) {
                     deleteSwipeWordBoundaries
                 } else {
                     val textStartOffset = deleteSwipeInitialEnd - deleteSwipeInitialText.length
