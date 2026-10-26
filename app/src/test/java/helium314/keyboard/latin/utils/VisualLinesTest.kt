@@ -59,4 +59,44 @@ class VisualLinesTest {
     fun `entries before the known text are not used`() {
         assertEquals(listOf(60, 45, 30), VisualLines.buildBoundaries(60, listOf(0, 30, 45), true, emptyList(), 30))
     }
+
+    // three lines of 5 chars, 10px wide chars: x of char i on its line = i * 10
+    private fun geometry3(): VisualLines.LineGeometry {
+        val lefts = FloatArray(15) { (it % 5) * 10f }
+        val rights = FloatArray(15) { (it % 5) * 10f + 10f }
+        return VisualLines.LineGeometry(100, lefts, rights, BooleanArray(15), listOf(100, 105, 110))
+    }
+
+    @Test
+    fun `line index of offsets`() {
+        val g = geometry3()
+        assertEquals(-1, g.lineIndexOf(99))
+        assertEquals(0, g.lineIndexOf(100))
+        assertEquals(0, g.lineIndexOf(104))
+        assertEquals(1, g.lineIndexOf(105))
+        assertEquals(2, g.lineIndexOf(114))
+    }
+
+    @Test
+    fun `same column one line up`() {
+        val g = geometry3()
+        // cursor at 113 (column 3 of the last line) -> column 3 of the line above is 108, then 103
+        assertEquals(listOf(113, 108, 103), g.boundaries(113, g.xAt(113)))
+    }
+
+    @Test
+    fun `column is kept on a shorter line`() {
+        val lefts = floatArrayOf(0f, 10f, 0f, 10f, 20f, 30f, 40f)
+        val rights = FloatArray(7) { lefts[it] + 10f }
+        // first line has 2 chars (offsets 0,1), second 5 chars (2..6)
+        val g = VisualLines.LineGeometry(0, lefts, rights, BooleanArray(7), listOf(0, 2))
+        assertEquals(1, g.columnOffset(0, 40f))
+        assertEquals(listOf(6, 1, 0), g.boundaries(6, g.xAt(6)))
+    }
+
+    @Test
+    fun `x at the end of the text uses the right edge`() {
+        val g = geometry3()
+        assertEquals(50f, g.xAt(115))
+    }
 }
